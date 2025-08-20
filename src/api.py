@@ -2,15 +2,24 @@ from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel
 from pathlib import Path
 from typing import List
-from model_loader import stream_model_response, cancel_generation, reset_generation
+from model_loader import stream_model_response, cancel_generation, reset_generation, prepare_models, get_model_from_cache
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 
 
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Starting up API, preloading models...")
+    prepare_models()
+    yield  
+    print("Shutting down API, cleaning up...")
+
+app = FastAPI(lifespan=lifespan)
 
 def sse_event(data: str) -> str:
     return f"data: {data}\n\n"
@@ -72,18 +81,14 @@ async def post_use_model(request: PromptRequest):
     prompt = request.promptBody
     model_name = request.modelName
 
-    model_path = find_model_path(model_name=request.modelName)
-    tokenizer_path = find_tokenizer_path(model_name=request.modelName)
-
-    if model_path is None or tokenizer_path is None:
-        raise HTTPException(404, f"Unknown model: {model_name}")
+    model, tokenizer = get_model_from_cache(request.modelName)
     
     reset_generation()
     
     def event_stream():
         yield sse_event(f'{{"event":"start","model":"{model_name}"}}')
 
-        for chunk in stream_model_response(model_path, tokenizer_path, prompt):
+        for chunk in stream_model_response(model, tokenizer, prompt):
             yield sse_event(chunk)
 
         yield sse_event('{"event":"end"}')

@@ -20,20 +20,43 @@ def quantization(load, type, double_quant, compute_dtype):
     )
     return nf4_config
 
-def stream_model_response(model_path, tokenizer_path, prompt, current_generation = {"cancel": False}):
-    assert os.path.exists(model_path), f"Model path does not exist: {model_path}"
-    assert os.path.exists(tokenizer_path), f"Tokenizer path does not exist: {tokenizer_path}"
+_loaded_models = {}
+_loaded_tokenizers = {}
 
-    #quantization WE NEED CUDA!!!
-    # nf4_config = quantization(True, "nf4", True, torch.bfloat16)
-    # Load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
-    # model = AutoModelForCausalLM.from_pretrained(model_path, quantization_config=nf4_config, local_files_only=True)
-    if "t5" in str(model_path):
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_path, local_files_only=True)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True)
+def prepare_models():
+    models_path = "../../Models/Models_for_testing_app"
+    tokenizers_path = "../../Tokenizers/Tokenizers_for_testing_app"
 
+    if not os.path.exists(models_path) or not os.path.exists(tokenizers_path):
+        raise RuntimeError("Models or Tokenizers directory does not exist")
+    
+    for model_name in os.listdir(models_path):
+        model_dir = os.path.join(models_path, model_name)
+        tokenizer_dir = os.path.join(tokenizers_path, model_name)
+
+        if not os.path.isdir(model_dir) or not os.path.isdir(tokenizer_dir):
+            continue
+
+        print(f"🔄 Loading model: {model_name}")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, local_files_only=True)
+
+        if "t5" in model_name.lower():
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_dir, local_files_only=True)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_dir, local_files_only=True)
+
+        _loaded_models[model_name] = model
+        _loaded_tokenizers[model_name] = tokenizer
+
+    print(f"Preloaded models: {list(_loaded_models.keys())}")
+
+def get_model_from_cache(model_name: str):
+    if model_name not in _loaded_models or model_name not in _loaded_tokenizers:
+        raise ValueError(f"Model '{model_name}' is not loaded in cache. Call prepare_models() first.")
+    return _loaded_models[model_name], _loaded_tokenizers[model_name]
+
+def stream_model_response(model, tokenizer, prompt, current_generation={"cancel": False}):
+    
     # Encode prompt and create attention mask explicitly
     inputs = tokenizer(prompt, return_tensors="pt")
     attention_mask = inputs["attention_mask"]
@@ -44,7 +67,7 @@ def stream_model_response(model_path, tokenizer_path, prompt, current_generation
     generation_thread = threading.Thread(
         target=model.generate,
         kwargs=dict(
-            inputs=inputs.input_ids,
+            input_ids=inputs.input_ids,
             attention_mask=attention_mask,
             max_new_tokens=200,
             streamer=streamer,
