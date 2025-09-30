@@ -9,9 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 
-
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Starting up API, preloading models...")
@@ -35,16 +32,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Define base paths
+
+#paths
 base_path = Path(__file__).resolve().parent / "../../Models/Models_for_testing_app"
 base_path_tokenizer = Path(__file__).resolve().parent / "../../Tokenizers/Tokenizers_for_testing_app"
 
-# Request model to match C# JSON
 class PromptRequest(BaseModel):
     modelName: str
     promptBody: str
 
-# Helper: get list of models
 def modelRepository() -> List[str]:
     models = []
     if base_path.exists() and base_path.is_dir():
@@ -54,28 +50,29 @@ def modelRepository() -> List[str]:
     print("Discovered models:", models)
     return models
 
-# Helper: find model path
 def find_model_path(model_name: str):
     if not base_path.exists():
         return None
     model_path = base_path / model_name
     return model_path if model_path.exists() else None
 
-# Helper: find tokenizer path
 def find_tokenizer_path(model_name: str):
     if not base_path_tokenizer.exists():
         return None
     tokenizer_path = base_path_tokenizer / model_name
     return tokenizer_path if tokenizer_path.exists() else None
 
-# GET: list available models
+@app.post("/AIPlanat/stopGeneration")
+async def stop_generation():
+    cancel_generation()
+    return {"status": "stopped"}
+
 @app.get("/AIPlanat/getModelsRepository")
 async def get_models_repository():
     models = modelRepository()
     return {"models": models}
 
 
-# POST: use a model to generate response
 @app.post("/AIPlanat/getModelResponse")
 async def post_use_model(request: PromptRequest):
     prompt = request.promptBody

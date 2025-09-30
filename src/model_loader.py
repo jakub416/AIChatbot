@@ -1,6 +1,6 @@
 import torch
 import os
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, BitsAndBytesConfig, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, BitsAndBytesConfig, AutoModelForSeq2SeqLM, StoppingCriteriaList, MaxLengthCriteria
 import threading
 
 generation_control = {"cancel": False}
@@ -55,29 +55,60 @@ def get_model_from_cache(model_name: str):
         raise ValueError(f"Model '{model_name}' is not loaded in cache. Call prepare_models() first.")
     return _loaded_models[model_name], _loaded_tokenizers[model_name]
 
-def stream_model_response(model, tokenizer, prompt, current_generation={"cancel": False}):
-    
-    # Encode prompt and create attention mask explicitly
+def stream_model_response(model, tokenizer, prompt):
     inputs = tokenizer(prompt, return_tensors="pt")
     attention_mask = inputs["attention_mask"]
 
-    # Create streamer
+    # Ensure pad_token_id and eos_token_id exist
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = eos_id
+
     streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
-    generation_thread = threading.Thread(
-        target=model.generate,
-        kwargs=dict(
-            input_ids=inputs.input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=200,
-            streamer=streamer,
-        )
+    gen_kwargs = dict(
+        input_ids=inputs.input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=200,
+        streamer=streamer,
+        do_sample=True,
+        temperature=0.2,
+        top_k=50,
+        top_p=0.95,
+        repetition_penalty=1.1,
+        eos_token_id=eos_id,
+        pad_token_id=pad_id,
+        # stopping_criteria=StoppingCriteriaList([MaxLengthCriteria(max_length=inputs.input_ids.shape[1] + 200)])
     )
+
+    generation_thread = threading.Thread(target=model.generate, kwargs=gen_kwargs)
     generation_thread.start()
 
     for new_text in streamer:
-        # print("STREAM:", repr(new_text))
         if generation_control["cancel"]:
             break
         yield new_text
 
+def test_model(model_path,tokenizer_path, prompt, max_new_tokens=128):
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        device_map="cpu",
+        torch_dtype=torch.float32,
+        low_cpu_mem_usage=True,
+        
+    )
+
+    inputs = tokenizer(prompt, return_tensors="pt")
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            temperature=0.7,
+            do_sample=True
+        )
+
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
